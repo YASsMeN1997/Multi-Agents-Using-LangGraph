@@ -8,4 +8,4 @@ tavily-python
 scrapegraphai
 langchain-groq
 python-dotenv
-
+langgraph-cli[inmem]
