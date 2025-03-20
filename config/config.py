@@ -8,3 +8,5 @@ class Config:
     os.environ["SCRAPGRAPH_API_KEY"] = os.getenv("SCRAPGRAPH_API_KEY")
     os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
     os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
+    os.environ["LANGSMITH_PROJECT"] = "Y_Multi_agents_Task"
