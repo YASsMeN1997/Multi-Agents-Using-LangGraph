@@ -1,10 +1,7 @@
-import os
-from dotenv import load_dotenv
+from config import config
 from langchain_groq import ChatGroq
 
-load_dotenv('.env')
-
-os.environ["GROQ_API_KEY"] = os.getenv("GROK_API_KEY")
+config.Config()
 
 llm = ChatGroq(
     model="llama-3.1-8b-instant",
@@ -12,7 +9,6 @@ llm = ChatGroq(
     max_tokens=None,
     timeout=None,
     max_retries=2,
-    # other params...
 )
 
 messages = [
