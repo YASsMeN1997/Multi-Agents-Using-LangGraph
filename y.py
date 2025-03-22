@@ -1,98 +1,126 @@
 from config import config
 from langchain_groq import ChatGroq
-
+import json
 config.Config()
 
+from typing import TypedDict, List , Optional
 from pydantic import BaseModel, Field
-from typing import List
+import os
 from langgraph.graph import StateGraph, START, END
+from IPython.display import Image, display
+from langchain_groq import ChatGroq
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
-from langchain.chat_models import ChatGroq
 
-# Define the Pydantic model for the output
+llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    max_tokens=None,
+    timeout=None,
+    max_retries=2,
+)
+
+# agent one : recomended a keywords for search quires
 class SuggestedSearchQueries(BaseModel):
     queries: List[str] = Field(
         ...,
         title="A list of suggested search queries to be passed to the search engine.",
         min_items=1,
-        max_items=100  # Assuming num_of_keywords is 100
+        max_items=10  # Will be overridden by input
     )
 
-# Define the agent's role and behavior
-class SearchQueriesRecommendationAgent:
-    def __init__(self, llm, verbose=True):
-        self.llm = llm
-        self.verbose = verbose
+# Define state schema
+class AgentState(TypedDict):
+    product_name: str
+    websites_list: List[str]
+    country_name: str
+    language: str
+    num_of_keywords: int
+    search_queries: Optional[SuggestedSearchQueries]
 
-    def run(self, context: dict) -> SuggestedSearchQueries:
-        # Extract context variables
-        product_name = context.get("product_name")
-        websites_list = context.get("websites_list")
-        country_name = context.get("country_name")
-        language = context.get("language")
-
-        # Generate the prompt for the LLM
-        prompt = f"""
-        YZ company is looking to buy {product_name} at the best prices (value for a price strategy).
-        The company targets the following websites: {', '.join(websites_list)}.
-        The company wants to reach all available products on the internet to be compared later in another stage.
-        The stores must sell the product in {country_name}.
-        Generate at most 100 search queries in {language} language.
-        The search queries must reach an e-commerce webpage for the product, and not a blog or listing page.
-        """
-
-        # Call the LLM to generate search queries
-        response = self.llm.invoke(prompt)
-
-        # Parse the LLM response into a list of queries
-        queries = response.content.strip().split("\n")
-
-        # Return the output as a Pydantic model
-        return SuggestedSearchQueries(queries=queries)
-
-# Define the graph structure
-def create_search_queries_graph(llm):
-    # Create the agent node
-    search_agent = SearchQueriesRecommendationAgent(llm=llm, verbose=True)
-    agent_node = AgentNode(
-        name="search_queries_recommendation_agent",
-        agent=search_agent,
-        input_keys=["product_name", "websites_list", "country_name", "language"],
-        output_key="suggested_queries"
+def search_query_node(state: AgentState):
+    # Create JSON parser
+    parser = JsonOutputParser(pydantic_object=SuggestedSearchQueries)
+    
+    # Build prompt with format instructions
+    prompt_template = ChatPromptTemplate.from_template(
+        """Generate EXACTLY {num_of_keywords} e-commerce search queries in {language} language for:
+        Product: {product_name}
+        Websites: {websites_list}
+        Country: {country_name}
+        Queries must: 
+        - Be specific to product comparison shopping
+        - Include relevant keywords for {country_name}
+        - Avoid website prefixes (just the search terms)
+        
+        Example format for 3 queries:
+        {{
+            "queries": ["office coffee machine deals", "professional coffee maker price", "commercial espresso machine offers"]
+        }}
+        
+        {format_instructions}"""
     )
-
-    # Create the graph
-    graph = Graph(nodes=[agent_node])
-
-    # Define the edges (in this case, a single node graph)
-    graph.add_edge(agent_node, Edge(end=True))
-
-    return graph
-
-# Example usage
-if __name__ == "__main__":
-    # Initialize the ChatGroq LLM
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        max_tokens=None,
-        timeout=None,
-        max_retries=2
+    
+    # Add format instructions
+    prompt = prompt_template.format(
+        product_name=state["product_name"],
+        websites_list=", ".join(state["websites_list"]),
+        country_name=state["country_name"],
+        language=state["language"],
+        num_of_keywords=state["num_of_keywords"],
+        format_instructions=parser.get_format_instructions()
     )
+    
+    # Create chain 
+    chain = llm | parser
+    
+    try:
+        result = chain.invoke(prompt)
+       # print(result)
+        return {"search_queries": result}
+    except Exception as e:
+        print(f"Error generating queries: {e}")
+        return {"search_queries": None}
 
-    # Create the graph
-    search_queries_graph = create_search_queries_graph(llm)
+# Set up the graph workflow
+workflow = StateGraph(AgentState)
 
-    # Define the input context
-    context = {
-        "product_name": "smartphone",
-        "websites_list": ["amazon", "ebay", "walmart"],
-        "country_name": "USA",
-        "language": "English"
-    }
+# Add nodes
+workflow.add_node("search_queries_recommendation", search_query_node)
 
-    # Execute the graph
-    result = search_queries_graph.run(context)
-    print("Generated Search Queries:")
-    for query in result.queries:
-        print(f"- {query}")
+# Define entry point
+workflow.add_edge(START, "search_queries_recommendation")
+
+# Connect to end
+workflow.add_edge("search_queries_recommendation", END)
+
+# Compile the graph
+app = workflow.compile()
+
+#display(Image(app.get_graph().draw_mermaid_png()))
+# Get the raw image bytes from the graph
+graph_image_bytes = app.get_graph().draw_mermaid_png()
+
+# Save to file
+with open("workflow_graph.png", "wb") as f:
+    f.write(graph_image_bytes)
+
+# Execute the graph
+inputs = {
+    "product_name": "coffee machine for the office",
+    "websites_list": ['www.amazon.com','www.jumia.com','www.noon.com'],
+    "country_name": "EGYPT",
+    "language": "english",
+    "num_of_keywords": 5,
+}
+
+result = app.invoke(inputs)
+
+# Save output if needed
+output_dir = "out_agent1"
+os.makedirs(output_dir, exist_ok=True)
+full_output = result["search_queries"]
+
+with open(os.path.join(output_dir, 'suggested_search_queries.json'), "w", encoding="utf-8") as f:
+    json.dump(full_output, f, indent=2, ensure_ascii=False)
